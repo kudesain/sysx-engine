@@ -1,0 +1,8 @@
+{
+  "version": "1.0.0",
+  "steps": ["> Booting game..."],
+  "logo": [" SYSX ENGINE "],
+  "slogan": "Ready to Play.",
+  "color": 10,
+  "duration": 10
+}

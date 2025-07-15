@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SysX Engine - Dev Kit v2.0b</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=VT323&family=Roboto+Mono:wght@400;700&display=swap');
+        body { background-color: #282c34; color: #abb2bf; font-family: 'Roboto Mono', monospace; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 2rem; height: 100vh; margin: 0; }
+        .dev-kit-container { background-color: #1e2127; border: 1px solid #4b5263; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); padding: 1.5rem; width: 90%; max-width: 800px; }
+        .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3a3f4b; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+        .header h1 { font-family: 'VT323', monospace; font-size: 2.5rem; color: #61afef; margin: 0; text-shadow: 0 0 10px rgba(97, 175, 239, 0.5); }
+        .header .version-tag { background-color: #e5c07b; color: #1e2127; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: bold; }
+        .main-content { display: flex; gap: 2rem; flex-wrap: wrap; }
+        #sysmoga-screen-container { flex-shrink: 0; width: 320px; height: 240px; background-color: #000; border-radius: 8px; box-shadow: inset 0 0 10px #000; }
+        canvas { display: block; border-radius: 8px; image-rendering: pixelated; image-rendering: crisp-edges; }
+        .info-panel { flex-grow: 1; min-width: 250px; }
+        .info-panel h2 { font-family: 'VT323', monospace; font-size: 1.8rem; color: #c678dd; margin-top: 0; margin-bottom: 1rem; border-bottom: 1px dashed #4b5263; padding-bottom: 0.5rem; }
+        #status-log { background-color: #2c313a; border-radius: 6px; padding: 1rem; height: 100px; overflow-y: auto; font-size: 0.9rem; margin-bottom: 1.5rem; }
+        #status-log p { margin: 0 0 0.5rem 0; white-space: pre-wrap; }
+        .log-entry::before { content: '> '; color: #61afef; }
+        .instructions ul { list-style: none; padding: 0; font-size: 0.9rem; }
+        .instructions li { margin-bottom: 0.5rem; }
+        .instructions code { background-color: #e5c07b; color: #282c34; padding: 0.1rem 0.3rem; border-radius: 4px; }
+        .footer { margin-top: 1.5rem; text-align: center; font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+    <div class="dev-kit-container">
+        <header class="header"><h1>SysX Dev Kit</h1><span class="version-tag">v2.0b</span></header>
+        <main class="main-content">
+            <div id="sysmoga-screen-container"></div>
+            <div class="info-panel">
+                <h2>Status Log</h2><div id="status-log"></div>
+                <h2>Instructions</h2>
+                <div class="instructions">
+                    <ul>
+                        <li><strong>Panah Kiri/Kanan:</strong> Bergerak</li>
+                        <li><strong>Spasi:</strong> Tombol A (Tembak)</li>
+                        <li><strong>X:</strong> Tombol B (Toggle Debug)</li>
+                    </ul>
+                </div>
+            </div>
+        </main>
+        <footer class="footer"><p>Edit kode game Anda di dalam tag &lt;script&gt; di bawah.</p></footer>
+    </div>
+
+    <script>
+    // ===============================================================
+    //
+    //          SysX Dev Kit v2.0b - Self-Contained
+    //
+    // ===============================================================
+
+    const VFS = {}; // Virtual File System
+
+    // --- /sysx_engine/sysx_core.js ---
+    VFS['sysx_core.js'] = `
+        window.SysX_Modules = window.SysX_Modules || {};
+        window.SysX_Modules.core = (() => {
+            let _ctx, _canvas, _assets, _currentState = '', _debugMode = false;
+            let _watchedValues = new Map(), _frameCount = 0, _lastFpsUpdate = 0, _currentFps = 0;
+            const PICO8_PALETTE = ['#000000', '#1D2B53', '#7E2553', '#008751', '#AB5236', '#5F574F', '#C2C3C7', '#FFF1E8', '#FF004D', '#FFA300', '#FFEC27', '#00E436', '#29ADFF', '#83769C', '#FF77A8', '#FFCCAA'];
+            
+            function init(context) {
+                _canvas = context.canvas; _ctx = context.ctx; _assets = context.assets;
+                _ctx.imageSmoothingEnabled = false; _lastFpsUpdate = performance.now();
+                if (typeof window.Game._create === 'function') window.Game._create();
+                requestAnimationFrame(gameLoop);
+            }
+
+            function gameLoop(timestamp) {
+                _frameCount++; if (timestamp > _lastFpsUpdate + 1000) { _currentFps = _frameCount; _frameCount = 0; _lastFpsUpdate = timestamp; }
+                
+                SysX_Modules.tween.updateTweens(timestamp);
+                SysX_Modules.transition.update(timestamp); // <-- BARU
+                SysX_Modules.fx.updateParticles();
+                SysX_Modules.fx.applyShake(_ctx);
+
+                const updateFunc = window.Game['_update_' + _currentState]; if (typeof updateFunc === 'function') updateFunc.call(window.Game);
+                
+                // Jangan gambar apapun jika sedang transisi keluar
+                if (!SysX_Modules.transition.isTransitioningOut()) {
+                    const drawFunc = window.Game['_draw_' + _currentState]; if (typeof drawFunc === 'function') drawFunc.call(window.Game);
+                    SysX_Modules.fx.drawParticles(_ctx, SysX_Modules.graphics.rectfill);
+                }
+
+                SysX_Modules.transition.draw(_ctx); // <-- BARU
+                drawDebugInfo();
+                _ctx.setTransform(1, 0, 0, 1, 0, 0);
+                SysX_Modules.input.updatePrevInput();
+                requestAnimationFrame(gameLoop);
+            }
+            
+            function drawDebugInfo() { if (_debugMode) { const info = ['FPS: ' + _currentFps, 'PART: ' + SysX_Modules.fx.getParticleCount(), 'TWEEN: ' + SysX_Modules.tween.getTweenCount()]; _watchedValues.forEach((v, k) => info.push(k.toUpperCase() + ': ' + v)); let y = 0; for (const t of info) { _ctx.font = '14px "Roboto Mono"'; SysX_Modules.graphics.rectfill(0, y, _ctx.measureText(t).width + 8, 16, 0); SysX_Modules.graphics.print(t, 4, y + 12, 7); y += 16; } } }
+            const getContext = () => ({ _ctx, _canvas, _assets, PICO8_PALETTE });
+            const debug = (isEnabled) => { _debugMode = !!isEnabled; };
+            const watch = (key, value) => { if (_debugMode) _watchedValues.set(key, value); };
+            const state = (newState) => { _currentState = newState; const initFunc = window.Game['_init_' + newState]; if (typeof initFunc === 'function') initFunc.call(window.Game); };
+            return { init, getContext, debug, watch, state };
+        })();
+    `;
+    
+    // --- /sysx_engine/sysx_tween.js ---
+    VFS['sysx_tween.js'] = `
+        window.SysX_Modules.tween = (() => {
+            let _activeTweens = [];
+            const Easing = { linear: t => t, easeInQuad: t => t*t, easeOutQuad: t => t*(2-t), easeInOutQuad: t => t<.5 ? 2*t*t : -1+(4-2*t)*t, easeOutBounce: t => { const n1 = 7.5625, d1 = 2.75; if (t < 1/d1) return n1*t*t; else if (t < 2/d1) return n1*(t-=(1.5/d1))*t + .75; else if (t < 2.5/d1) return n1*(t-=(2.25/d1))*t + .9375; else return n1*(t-=(2.625/d1))*t + .984375; } };
+            function tween(target, properties, duration, easeType = 'linear', onComplete) {
+                const newTween = { target, properties, duration, easeFunc: Easing[easeType] || Easing.linear, onComplete, startTime: performance.now(), startValues: {} };
+                for (const key in properties) { if (target[key] !== undefined) { newTween.startValues[key] = target[key]; } }
+                _activeTweens.push(newTween);
+            }
+            function updateTweens(timestamp) {
+                for (let i = _activeTweens.length - 1; i >= 0; i--) {
+                    const t = _activeTweens[i]; const elapsed = timestamp - t.startTime; const progress = Math.min(elapsed / t.duration, 1); const easedProgress = t.easeFunc(progress);
+                    for (const key in t.properties) { const start = t.startValues[key]; const end = t.properties[key]; t.target[key] = start + (end - start) * easedProgress; }
+                    if (progress >= 1) { if (t.onComplete) t.onComplete(); _activeTweens.splice(i, 1); }
+                }
+            }
+            const getTweenCount = () => _activeTweens.length;
+            return { tween, updateTweens, getTweenCount };
+        })();
+    `;
+
+    // --- /sysx_engine/sysx_transition.js (MODUL BARU) ---
+    VFS['sysx_transition.js'] = `
+        window.SysX_Modules.transition = (() => {
+            let _active = false, _duration = 500, _progress = 0;
+            let _direction = 'in', _onMiddleCallback = null;
+            let _startTime = 0;
+
+            function transition(type = 'fade', duration = 500, onMiddle) {
+                if (_active) return; // Jangan mulai transisi baru jika sedang berjalan
+                _active = true;
+                _duration = duration;
+                _onMiddleCallback = onMiddle;
+                _direction = 'out'; // Selalu mulai dengan fade out
+                _startTime = performance.now();
+            }
+
+            function update(timestamp) {
+                if (!_active) return;
+                const elapsed = timestamp - _startTime;
+                _progress = Math.min(elapsed / (_duration / 2), 1);
+                
+                if (_progress >= 1) {
+                    if (_direction === 'out') {
+                        // Di tengah transisi
+                        if (_onMiddleCallback) _onMiddleCallback();
+                        _direction = 'in'; // Balikkan arah
+                        _startTime = timestamp; // Reset waktu mulai
+                    } else {
+                        // Selesai transisi
+                        _active = false;
+                    }
+                }
+            }
+
+            function draw(ctx) {
+                if (!_active) return;
+                let alpha = _direction === 'out' ? _progress : 1 - _progress;
+                ctx.fillStyle = 'rgba(0,0,0,' + alpha + ')';
+                ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            }
+
+            const isTransitioningOut = () => _active && _direction === 'out';
+
+            return { transition, update, draw, isTransitioningOut };
+        })();
+    `;
+
+    // --- Sisanya (disesuaikan) ---
+    VFS['sysx_graphics.js'] = `window.SysX_Modules.graphics = (() => { const TILE_SIZE = 16; const SPRITESHEET_KEY = 'main_spritesheet'; const getCoreContext = () => SysX_Modules.core.getContext(); function cls(c) { const { _ctx, _canvas, PICO8_PALETTE } = getCoreContext(); _ctx.fillStyle = PICO8_PALETTE[c] || '#000'; _ctx.fillRect(0, 0, _canvas.width, _canvas.height); } function rectfill(x, y, w, h, c) { const { _ctx, PICO8_PALETTE } = getCoreContext(); _ctx.fillStyle = PICO8_PALETTE[c] || '#FFF'; _ctx.fillRect(x, y, w, h); } function print(t, x, y, c) { const { _ctx, PICO8_PALETTE } = getCoreContext(); _ctx.font = '14px "Roboto Mono"'; _ctx.fillStyle = PICO8_PALETTE[c] || '#FFF'; _ctx.fillText(t, x, y); } function spr(idx, dx, dy) { const { _ctx, _assets } = getCoreContext(); const sheet = _assets[SPRITESHEET_KEY]; if (!sheet || !sheet.complete) return; const cols = Math.floor(sheet.width / TILE_SIZE); const sx = (idx % cols) * TILE_SIZE; const sy = Math.floor(idx / cols) * TILE_SIZE; _ctx.drawImage(sheet, sx, sy, TILE_SIZE, TILE_SIZE, dx, dy, TILE_SIZE, TILE_SIZE); } function map(tm, mx = 0, my = 0) { if (!tm) return; for (let r = 0; r < tm.length; r++) for (let c = 0; c < tm[r].length; c++) if (tm[r][c] >= 0) spr(tm[r][c], mx + c * TILE_SIZE, my + r * TILE_SIZE); } return { cls, rectfill, print, spr, map }; })();`;
+    VFS['sysx_audio.js'] = `window.SysX_Modules.audio = (() => { let _currentMusic = null; const getCoreContext = () => SysX_Modules.core.getContext(); function sfx(key) { const { _assets } = getCoreContext(); const sound = _assets[key]; if (sound) { sound.currentTime = 0; sound.play().catch(e => {}); } } function music(key, loop = true, stop = false) { if (_currentMusic) { _currentMusic.pause(); _currentMusic = null; } if (stop) return; const { _assets } = getCoreContext(); const sound = _assets[key]; if (sound) { sound.loop = loop; sound.currentTime = 0; sound.play().catch(e => {}); _currentMusic = sound; } } return { sfx, music }; })();`;
+    VFS['sysx_fx.js'] = `window.SysX_Modules.fx = (() => { let _particles = []; let _shakeEndTime = 0, _shakeIntensity = 0; function collide(r1, r2) { if (!r1 || !r2) return false; return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y; } function shake(intensity, duration) { _shakeIntensity = intensity; _shakeEndTime = Date.now() + duration; } function emit(x, y, count = 10, color = 9, life = 30) { for (let i = 0; i < count; i++) _particles.push({ x, y, vx: (Math.random() - 0.5) * 4, vy: (Math.random() - 0.5) * 4 - 1, size: Math.random() * 2 + 1, life: Math.random() * life, color }); } function updateParticles() { for (let i = _particles.length - 1; i >= 0; i--) { const p = _particles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--; if (p.life <= 0) _particles.splice(i, 1); } } function drawParticles(_ctx, rectfillFunc) { for (const p of _particles) rectfillFunc(p.x, p.y, p.size, p.size, p.color); } function applyShake(_ctx) { if (Date.now() < _shakeEndTime) { const dx = (Math.random() - 0.5) * _shakeIntensity * 2; const dy = (Math.random() - 0.5) * _shakeIntensity * 2; _ctx.translate(dx, dy); } else { _shakeIntensity = 0; } } const getParticleCount = () => _particles.length; return { collide, shake, emit, updateParticles, drawParticles, applyShake, getParticleCount }; })();`;
+    VFS['sysx_input.js'] = `window.SysX_Modules.input = (() => { let _inputState = {}; let _prevInputState = {}; function btn(k) { return _inputState[k] || false; } function btnp(k) { return _inputState[k] && !_prevInputState[k]; } function _updateInput(newState) { _inputState = newState; } function updatePrevInput() { _prevInputState = { ..._inputState }; } return { btn, btnp, _updateInput, updatePrevInput }; })();`;
+    VFS['sysx_main.js'] = `window.SysX = { ...SysX_Modules.core, ...SysX_Modules.graphics, ...SysX_Modules.audio, ...SysX_Modules.fx, ...SysX_Modules.input, ...SysX_Modules.tween, ...SysX_Modules.transition };`;
+
+    // ===============================================================
+    //          AREA KERJA DEVELOPER (Astro Blaster v1.2)
+    // ===============================================================
+
+    VFS['manifest.js'] = `
+        window.manifest = {
+            "title": "Astro Blaster", "version": "1.2",
+            "assets": [
+                { "key": "main_spritesheet", "path": "https://i.ibb.co/6b3hT4k/spritesheet.png" },
+                { "key": "shoot_sfx", "path": "data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU9vT19PCgoLDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3+Dh4uPk5ebn6Onq6+zt7u/w8fLz9PX29/j5+vv8/f7/" },
+                { "key": "explosion_sfx", "path": "data:audio/wav;base64,UklGRigBAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABgAZGF0YQQBAAD9/f7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+' },
+                { "key": "bg_music", "path": "data:audio/wav;base64,UklGRiYGAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABgAZGF0YQIGAAB3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3-"}
+            ]
+        };
+    `;
+
+    VFS['game.js'] = `
+        window.Game = {
+            player: {}, bullets: [], enemies: [], stars: [], score: 0, hiscore: 0, isDebug: false,
+            enemySpawnTimer: 0, titleText: {},
+            _create: function() {
+                for(let i = 0; i < 50; i++) { this.stars.push({ x: Math.random() * 320, y: Math.random() * 240, speed: Math.random() * 0.5 + 0.2, size: Math.random() * 1.5 + 0.5 }); }
+                SysX.state('title');
+            },
+            _init_title: function() { SysX.music('bg_music', true); this.titleText = { y: -20, alpha: 1 }; SysX.tween(this.titleText, { y: 100 }, 1000, 'easeOutBounce'); },
+            _update_title: function() { if (SysX.btnp('space')) { SysX.transition('fade', 500, () => SysX.state('playing')); } },
+            _draw_title: function() { SysX.cls(1); this.stars.forEach(s => SysX.rectfill(s.x, s.y, s.size, s.size, 6)); SysX.print("ASTRO BLASTER", 100, this.titleText.y, 7); SysX.print("Press 'A' to Start", 85, 140, 10); },
+            _init_playing: function() { this.player = { x: 152, y: 210, w: 16, h: 16, speed: 3, shootCooldown: 0, recoil: 0 }; this.bullets = []; this.enemies = []; this.score = 0; this.enemySpawnTimer = 120; },
+            _update_playing: function() {
+                if (SysX.btnp('keyB')) { this.isDebug = !this.isDebug; SysX.debug(this.isDebug); }
+                SysX.watch('Enemies', this.enemies.length);
+                if (SysX.btn('left')) this.player.x -= this.player.speed;
+                if (SysX.btn('right')) this.player.x += this.player.speed;
+                this.player.x = Math.max(0, Math.min(320 - this.player.w, this.player.x));
+                if (this.player.shootCooldown > 0) this.player.shootCooldown--;
+                if (this.player.recoil > 0) this.player.recoil--;
+                if (SysX.btn('space') && this.player.shootCooldown === 0) { this.bullets.push({ x: this.player.x + 7, y: this.player.y, w: 2, h: 6 }); this.player.shootCooldown = 10; this.player.recoil = 4; SysX.sfx('shoot_sfx'); }
+                for (let i = this.bullets.length - 1; i >= 0; i--) { this.bullets[i].y -= 5; if (this.bullets[i].y < -6) this.bullets.splice(i, 1); }
+                this.enemySpawnTimer--;
+                if(this.enemySpawnTimer <= 0) {
+                    const newEnemy = { x: Math.random() * (320 - 16), y: -16, w: 16, h: 16, speed: 0 };
+                    this.enemies.push(newEnemy);
+                    SysX.tween(newEnemy, { y: Math.random() * 80 + 20, speed: Math.random() * 1 + 0.5 }, 2000, 'easeOutQuad');
+                    this.enemySpawnTimer = Math.random() * 60 + 30;
+                }
+                for (let i = this.enemies.length - 1; i >= 0; i--) {
+                    const enemy = this.enemies[i]; enemy.y += enemy.speed;
+                    if (enemy.y > 240) { this.enemies.splice(i, 1); SysX.transition('fade', 500, () => SysX.state('game_over')); }
+                    for (let j = this.bullets.length - 1; j >= 0; j--) {
+                        if(SysX.collide(this.bullets[j], enemy)) {
+                            SysX.shake(4, 150); SysX.sfx('explosion_sfx');
+                            SysX.emit(enemy.x + 8, enemy.y + 8, 20, 9, 40);
+                            this.enemies.splice(i, 1); this.bullets.splice(j, 1); this.score += 100; break;
+                        }
+                    }
+                }
+            },
+            _draw_playing: function() {
+                SysX.cls(1);
+                this.stars.forEach(s => { s.y += s.speed; if (s.y > 240) { s.y = 0; s.x = Math.random() * 320; } SysX.rectfill(s.x, s.y, s.size, s.size, 6); });
+                SysX.spr(0, this.player.x, this.player.y + this.player.recoil);
+                this.bullets.forEach(b => SysX.rectfill(b.x, b.y, b.w, b.h, 11));
+                this.enemies.forEach(e => SysX.spr(1, e.x, e.y));
+                SysX.print("SCORE: " + this.score, 5, 15, 7);
+            },
+            _init_game_over: function() { if (this.score > this.hiscore) this.hiscore = this.score; SysX.music(null, false, true); },
+            _update_game_over: function() { if (SysX.btnp('space')) { SysX.transition('fade', 500, () => SysX.state('title')); } },
+            _draw_game_over: function() { SysX.cls(8); SysX.print("GAME OVER", 120, 80, 7); SysX.print("SCORE: " + this.score, 110, 110, 6); SysX.print("HI-SCORE: " + this.hiscore, 110, 130, 10); SysX.print("Press 'A' to Restart", 85, 170, 7); }
+        };
+    `;
+
+    // ===============================================================
+    //          FIRMWARE & BOOTLOADER (Jangan Diubah)
+    // ===============================================================
+    document.addEventListener('DOMContentLoaded', () => {
+        const scriptOrder = ['sysx_core.js', 'sysx_tween.js', 'sysx_transition.js', 'sysx_graphics.js', 'sysx_audio.js', 'sysx_fx.js', 'sysx_input.js', 'sysx_main.js', 'manifest.js', 'game.js'];
+        scriptOrder.forEach(fileName => { try { const script = document.createElement('script'); script.textContent = VFS[fileName]; document.head.appendChild(script); } catch (e) { console.error(`Gagal memuat virtual file: ${fileName}`, e); } });
+        class SysmogaCore {
+            constructor() {
+                this.activeInput = {}; this.screenContainer = document.getElementById('sysmoga-screen-container'); this.statusLog = document.getElementById('status-log');
+                const keyMap = { 'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right', ' ': 'space', 'x': 'keyB' };
+                document.addEventListener('keydown', (e) => { if (keyMap[e.key]) { this.activeInput[keyMap[e.key]] = true; e.preventDefault(); } });
+                document.addEventListener('keyup', (e) => { if (keyMap[e.key]) { this.activeInput[keyMap[e.key]] = false; e.preventDefault(); } });
+            }
+            log(message) { const p = document.createElement('p'); p.className = 'log-entry'; p.textContent = message; this.statusLog.appendChild(p); this.statusLog.scrollTop = this.statusLog.scrollHeight; }
+            async bootRom(rom) { this.log(`Membaca ROM...`); const assets = await this.loadAssets(rom.manifest); this.log(`ROM Type: experimental_canvas`); this.bootSysXGame(rom, assets); }
+            async loadAssets(manifest) {
+                if (!manifest || !manifest.assets || !manifest.assets.length) { this.log("Tidak ada aset eksternal."); return {}; }
+                this.log(`Memuat ${manifest.assets.length} aset...`);
+                const assetPromises = manifest.assets.map(assetInfo => new Promise(resolve => {
+                    if (assetInfo.path.startsWith('data:audio')) { const audio = new Audio(assetInfo.path); resolve({ key: assetInfo.key, asset: audio }); } 
+                    else { const img = new Image(); img.src = assetInfo.path; img.crossOrigin = "anonymous"; img.onload = () => resolve({ key: assetInfo.key, asset: img }); img.onerror = () => { console.error(`Gagal memuat aset: ${assetInfo.key}`); resolve({ key: assetInfo.key, asset: null }); }; }
+                }));
+                const loaded = await Promise.all(assetPromises); const assetMap = {}; loaded.forEach(item => { if (item.asset) assetMap[item.key] = item.asset; });
+                this.log("Semua aset berhasil dimuat."); return assetMap;
+            }
+            bootSysXGame(rom, assets) {
+                this.log("Booting SysX Engine..."); this.screenContainer.innerHTML = ''; const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 240; this.screenContainer.appendChild(canvas);
+                const context = { canvas: canvas, ctx: canvas.getContext('2d'), assets: assets };
+                window.SysX.init(context); this.startGameInputLoop(); this.log(`SysX Game '${window.manifest.title || 'Untitled'}' berjalan.`);
+            }
+            startGameInputLoop() { const loop = () => { window.SysX._updateInput(this.activeInput); requestAnimationFrame(loop); }; requestAnimationFrame(loop); }
+        }
+        const firmware = new SysmogaCore();
+        const virtualRom = { manifest: window.manifest, gameCode: window.Game };
+        firmware.bootRom(virtualRom);
+    });
+    </script>
+</body>
+</html>

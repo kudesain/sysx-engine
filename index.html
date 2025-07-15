@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SysX Engine v1.1 - Modular</title>
+    <style>
+        body { background-color: #333; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: monospace; }
+        canvas { background-color: #000; border: 4px solid #555; border-radius: 8px; box-shadow: 0 8px 20px rgba(0,0,0,0.5); image-rendering: -moz-crisp-edges; image-rendering: -webkit-crisp-edges; image-rendering: pixelated; image-rendering: crisp-edges; }
+        h1 { color: #eee; text-shadow: 2px 2px 4px #000; }
+        #sysmoga-screen-container { width: 320px; height: 240px; }
+        #controls { margin-top: 1rem; color: #aaa; }
+    </style>
+</head>
+<body>
+    <h1>SysX Engine v1.1 - Modular Refactor</h1>
+    <div id="sysmoga-screen-container"></div>
+    <div id="controls">Gunakan Panah, Spasi (A), dan X (B)</div>
+
+    <script>
+    // ===============================================================
+    //
+    //          SysX Engine - v1.1 "Modular Refactor"
+    //
+    // Ini adalah demonstrasi bagaimana engine dipecah menjadi beberapa file
+    // untuk keterbacaan dan pengelolaan yang lebih baik.
+    //
+    // ===============================================================
+
+    // Objek global untuk menampung modul-modul engine
+    const SysX_Modules = {};
+
+    // --- /sysx_engine/sysx_core.js ---
+    // Mengelola data inti, game loop, dan state.
+    SysX_Modules.core = (() => {
+        let _ctx, _canvas, _assets;
+        let _currentState = '';
+        let _debugMode = false;
+        let _watchedValues = new Map();
+        let _frameCount = 0, _lastFpsUpdate = 0, _currentFps = 0;
+
+        const PICO8_PALETTE = ['#000000', '#1D2B53', '#7E2553', '#008751', '#AB5236', '#5F574F', '#C2C3C7', '#FFF1E8', '#FF004D', '#FFA300', '#FFEC27', '#00E436', '#29ADFF', '#83769C', '#FF77A8', '#FFCCAA'];
+
+        function init(context) {
+            _canvas = context.canvas; _ctx = context.ctx; _assets = context.assets;
+            _ctx.imageSmoothingEnabled = false;
+            _lastFpsUpdate = performance.now();
+            if (typeof window.Game._create === 'function') window.Game._create();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameLoop(timestamp) {
+            _frameCount++;
+            if (timestamp > _lastFpsUpdate + 1000) { _currentFps = _frameCount; _frameCount = 0; _lastFpsUpdate = timestamp; }
+            
+            SysX_Modules.fx.updateParticles();
+            SysX_Modules.fx.applyShake(_ctx);
+
+            const updateFunc = window.Game[`_update_${_currentState}`];
+            if (typeof updateFunc === 'function') updateFunc();
+            
+            const drawFunc = window.Game[`_draw_${_currentState}`];
+            if (typeof drawFunc === 'function') drawFunc();
+            
+            SysX_Modules.fx.drawParticles(_ctx, SysX_Modules.graphics.rectfill);
+            drawDebugInfo();
+
+            _ctx.setTransform(1, 0, 0, 1, 0, 0);
+            SysX_Modules.input.updatePrevInput();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function drawDebugInfo() {
+            if (_debugMode) {
+                const info = [`FPS: ${_currentFps}`, `PART: ${SysX_Modules.fx.getParticleCount()}`];
+                _watchedValues.forEach((v, k) => info.push(`${k.toUpperCase()}: ${v}`));
+                let y = 0;
+                for (const t of info) {
+                    SysX_Modules.graphics.rectfill(0, y, _ctx.measureText(t).width + 8, 16, 0);
+                    SysX_Modules.graphics.print(t, 4, y + 12, 7);
+                    y += 16;
+                }
+            }
+        }
+
+        const getContext = () => ({ _ctx, _canvas, _assets, PICO8_PALETTE });
+        const debug = (isEnabled) => { _debugMode = !!isEnabled; };
+        const watch = (key, value) => { if (_debugMode) _watchedValues.set(key, value); };
+        const state = (newState) => {
+            _currentState = newState;
+            const initFunc = window.Game[`_init_${newState}`];
+            if (typeof initFunc === 'function') initFunc();
+        };
+
+        return { init, getContext, debug, watch, state };
+    })();
+
+    // --- /sysx_engine/sysx_graphics.js ---
+    // Semua fungsi yang berhubungan dengan menggambar.
+    SysX_Modules.graphics = (() => {
+        const TILE_SIZE = 16;
+        const SPRITESHEET_KEY = 'main_spritesheet';
+
+        function cls(c) {
+            const { _ctx, _canvas, PICO8_PALETTE } = SysX_Modules.core.getContext();
+            _ctx.fillStyle = PICO8_PALETTE[c] || '#000';
+            _ctx.fillRect(0, 0, _canvas.width, _canvas.height);
+        }
+        function rectfill(x, y, w, h, c) {
+            const { _ctx, PICO8_PALETTE } = SysX_Modules.core.getContext();
+            _ctx.fillStyle = PICO8_PALETTE[c] || '#FFF';
+            _ctx.fillRect(x, y, w, h);
+        }
+        function print(t, x, y, c) {
+            const { _ctx, PICO8_PALETTE } = SysX_Modules.core.getContext();
+            _ctx.font = '14px monospace';
+            _ctx.fillStyle = PICO8_PALETTE[c] || '#FFF';
+            _ctx.fillText(t, x, y);
+        }
+        function spr(idx, dx, dy) {
+            const { _ctx, _assets } = SysX_Modules.core.getContext();
+            const sheet = _assets[SPRITESHEET_KEY];
+            if (!sheet || !sheet.complete) return;
+            const cols = Math.floor(sheet.width / TILE_SIZE);
+            const sx = (idx % cols) * TILE_SIZE;
+            const sy = Math.floor(idx / cols) * TILE_SIZE;
+            _ctx.drawImage(sheet, sx, sy, TILE_SIZE, TILE_SIZE, dx, dy, TILE_SIZE, TILE_SIZE);
+        }
+        function map(tm, mx = 0, my = 0) {
+            if (!tm) return;
+            for (let r = 0; r < tm.length; r++) {
+                for (let c = 0; c < tm[r].length; c++) {
+                    if (tm[r][c] >= 0) spr(tm[r][c], mx + c * TILE_SIZE, my + r * TILE_SIZE);
+                }
+            }
+        }
+        return { cls, rectfill, print, spr, map };
+    })();
+
+    // --- /sysx_engine/sysx_audio.js ---
+    // Semua fungsi audio.
+    SysX_Modules.audio = (() => {
+        let _currentMusic = null;
+        function sfx(key) {
+            const { _assets } = SysX_Modules.core.getContext();
+            const sound = _assets[key];
+            if (sound) { sound.currentTime = 0; sound.play(); }
+        }
+        function music(key, loop = true, stop = false) {
+            if (_currentMusic) { _currentMusic.pause(); _currentMusic = null; }
+            if (stop) return;
+            const { _assets } = SysX_Modules.core.getContext();
+            const sound = _assets[key];
+            if (sound) { sound.loop = loop; sound.currentTime = 0; sound.play(); _currentMusic = sound; }
+        }
+        return { sfx, music };
+    })();
+
+    // --- /sysx_engine/sysx_fx.js ---
+    // Fisika, partikel, dan efek.
+    SysX_Modules.fx = (() => {
+        let _particles = [];
+        let _shakeEndTime = 0, _shakeIntensity = 0;
+
+        function collide(r1, r2) { if (!r1 || !r2) return false; return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y; }
+        function shake(intensity, duration) { _shakeIntensity = intensity; _shakeEndTime = Date.now() + duration; }
+        function emit(x, y, count = 10, color = 9, life = 30) { for (let i = 0; i < count; i++) _particles.push({ x, y, vx: (Math.random() - 0.5) * 4, vy: (Math.random() - 0.5) * 4 - 1, size: Math.random() * 2 + 1, life: Math.random() * life, color }); }
+        
+        function updateParticles() { for (let i = _particles.length - 1; i >= 0; i--) { const p = _particles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--; if (p.life <= 0) _particles.splice(i, 1); } }
+        function drawParticles(_ctx, rectfillFunc) { for (const p of _particles) rectfillFunc(p.x, p.y, p.size, p.size, p.color); }
+        function applyShake(_ctx) { if (Date.now() < _shakeEndTime) { const dx = (Math.random() - 0.5) * _shakeIntensity * 2; const dy = (Math.random() - 0.5) * _shakeIntensity * 2; _ctx.translate(dx, dy); } else { _shakeIntensity = 0; } }
+        const getParticleCount = () => _particles.length;
+
+        return { collide, shake, emit, updateParticles, drawParticles, applyShake, getParticleCount };
+    })();
+
+    // --- /sysx_engine/sysx_input.js ---
+    // Manajemen input.
+    SysX_Modules.input = (() => {
+        let _inputState = {};
+        let _prevInputState = {};
+        function btn(k) { return _inputState[k] || false; }
+        function btnp(k) { return _inputState[k] && !_prevInputState[k]; }
+        function _updateInput(ns) { _inputState = ns; }
+        function updatePrevInput() { _prevInputState = { ..._inputState }; }
+        return { btn, btnp, _updateInput, updatePrevInput };
+    })();
+
+    // --- /sysx_engine/sysx_main.js ---
+    // File ini bertugas sebagai "lem", menyatukan semua modul
+    // menjadi satu objek global `SysX`.
+    const SysX = {
+        ...SysX_Modules.core,
+        ...SysX_Modules.graphics,
+        ...SysX_Modules.audio,
+        ...SysX_Modules.fx,
+        ...SysX_Modules.input
+    };
+
+    // ---------------------------------------------------------------
+    // FILE: game.js (Contoh Game Pengguna - TIDAK BERUBAH)
+    // ---------------------------------------------------------------
+    const Game = {
+        player: {}, bullets: [], enemies: [], score: 0, isDebug: false,
+        levelData: [[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1,-1, 2,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1, 2, 2, 2,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, 2, 2,-1,-1,-1,-1,-1,-1],[-1,-1, 2, 2,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],[ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],[ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],[ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]],
+        _create: function() { SysX.state('title'); },
+        _update_title: function() { if (SysX.btnp('space')) SysX.state('playing'); },
+        _draw_title: function() { SysX.cls(1); SysX.print("SPACE GUARDIAN", 80, 100, 7); SysX.print("Press SPACE to Start", 60, 140, 6); },
+        _init_playing: function() { this.player = { x: 152, y: 200, w: 16, h: 16, speed: 2, spriteIndex: 3 }; this.bullets = []; this.enemies = []; this.score = 0; for(let i = 0; i < 5; i++) this.enemies.push({ x: 30 + i * 55, y: 40, w: 16, h: 16, speed: 0.5, spriteIndex: 4 }); SysX.music('bg_music'); },
+        _update_playing: function() {
+            if (SysX.btnp('keyB')) { this.isDebug = !this.isDebug; SysX.debug(this.isDebug); }
+            SysX.watch('enemies', this.enemies.length);
+            if (SysX.btn('left')) this.player.x -= this.player.speed;
+            if (SysX.btn('right')) this.player.x += this.player.speed;
+            this.player.x = Math.max(0, Math.min(320 - this.player.w, this.player.x));
+            if (SysX.btnp('space')) { this.bullets.push({ x: this.player.x + this.player.w / 2 - 2, y: this.player.y, w: 4, h: 8, speed: 4, color: 10 }); SysX.sfx('shoot_sound'); }
+            for (let i = this.bullets.length - 1; i >= 0; i--) { this.bullets[i].y -= this.bullets[i].speed; if (this.bullets[i].y < -this.bullets[i].h) this.bullets.splice(i, 1); }
+            for (let i = this.enemies.length - 1; i >= 0; i--) {
+                const enemy = this.enemies[i];
+                enemy.x += enemy.speed;
+                if(enemy.x < 10 || enemy.x > 320 - 26) enemy.speed *= -1;
+                for (let j = this.bullets.length - 1; j >= 0; j--) {
+                    if(SysX.collide(this.bullets[j], enemy)) {
+                        SysX.shake(4, 150); SysX.sfx('explosion_sound');
+                        SysX.emit(enemy.x + enemy.w / 2, enemy.y + enemy.h / 2, 15, 9, 40);
+                        this.enemies.splice(i, 1); this.bullets.splice(j, 1);
+                        this.score += 100;
+                        break;
+                    }
+                }
+            }
+            if (this.enemies.length === 0) SysX.state('win');
+        },
+        _draw_playing: function() { SysX.cls(1); SysX.map(this.levelData, 0, 208); SysX.spr(this.player.spriteIndex, this.player.x, this.player.y); this.enemies.forEach(e => SysX.spr(e.spriteIndex, e.x, e.y)); this.bullets.forEach(b => SysX.rectfill(b.x, b.y, b.w, b.h, b.color)); SysX.print(`SCORE: ${this.score}`, 8, 220, 7); },
+        _init_win: function() { SysX.music(null, false, true); SysX.sfx('win_sound'); },
+        _update_win: function() { if (SysX.btnp('space')) SysX.state('title'); },
+        _draw_win: function() { SysX.cls(5); SysX.print("YOU WIN!", 120, 100, 7); SysX.print(`Final Score: ${this.score}`, 80, 120, 10); SysX.print("Press SPACE to Restart", 50, 160, 6); }
+    };
+
+    // ---------------------------------------------------------------
+    // FILE: manifest.json (Data Game)
+    // ---------------------------------------------------------------
+    const manifest = {
+        assets: [
+            { key: 'main_spritesheet', path: 'https://i.ibb.co/6b3hT4k/spritesheet.png' },
+            { key: 'shoot_sound', path: 'data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU9vT19PCgoLDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3+Dh4uPk5ebn6Onq6+zt7u/w8fLz9PX29/j5+vv8/f7/' },
+            { key: 'explosion_sound', path: 'data:audio/wav;base64,UklGRigBAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABgAZGF0YQQBAAD9/f7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+' },
+            { key: 'win_sound', path: 'data:audio/wav;base64,UklGRiQCAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABgAZGF0YQQCAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC-'},
+            { key: 'bg_music', path: 'data:audio/wav;base64,UklGRiYGAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABgAZGF0YQIGAAB3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d-'} ] };
+        async function loadAssets(manifest) { const assetPromises = manifest.assets.map(assetInfo => new Promise(resolve => { if (assetInfo.path.startsWith('data:audio')) { const audio = new Audio(assetInfo.path); resolve({ key: assetInfo.key, asset: audio }); } else { const img = new Image(); img.src = assetInfo.path; img.onload = () => resolve({ key: assetInfo.key, asset: img }); img.onerror = () => resolve({ key: assetInfo.key, asset: null }); } })); const loaded = await Promise.all(assetPromises); const assetMap = {}; loaded.forEach(item => { if (item.asset) assetMap[item.key] = item.asset; }); return assetMap; }
+        const keyMap = { 'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right', ' ': 'space', 'x': 'keyB' };
+        const activeKeys = {};
+        document.addEventListener('keydown', (e) => { if (keyMap[e.key]) { activeKeys[keyMap[e.key]] = true; e.preventDefault(); } });
+        document.addEventListener('keyup', (e) => { if (keyMap[e.key]) { activeKeys[keyMap[e.key]] = false; e.preventDefault(); } });
+        function updateEngineInput() { SysX._updateInput(activeKeys); requestAnimationFrame(updateEngineInput); }
+        async function boot() {
+            const loadedAssets = await loadAssets(fakeManifest);
+            loadingText.textContent = "Assets Loaded. Booting...";
+            SysX.init({ canvas, ctx, assets: loadedAssets });
+            updateEngineInput();
+            loadingText.style.display = 'none';
+        }
+        boot();
+    });
+    </script>
+</body>
+</html>
+```
+
+Oke, Bro. Siap, kita lanjutkan Fase 3. Let's gooo!
+
+Sesuai rencana, kita akan menyelesaikan pilar "Debugging Tools". FPS counter saja tidak cukup. Developer butuh lebih banyak informasi untuk melacak apa yang terjadi di dalam game.
+
+Saya akan upgrade engine kita ke **v0.8**. Di versi ini, debug overlay kita akan jauh lebih informatif.
+
+**Pembaruan Kunci di SysX Engine v0.8:**
+1.  **Debug Overlay Ditingkatkan:** Selain FPS, overlay sekarang juga menampilkan jumlah partikel aktif di layar (`PART`).
+2.  **API Baru `watch()`:** Saya menambahkan fungsi `SysX.watch(nama, nilai)` yang sangat berguna. Ini memungkinkan developer untuk "mengintip" nilai variabel apa pun secara real-time langsung di layar debug.
+3.  **Game Demo Diperbarui:** Selain FPS, sekarang kita juga `watch` jumlah musuh yang tersisa. Coba tekan tombol 'x' untuk melihat semua info debug baru ini.
+
+Ini dia kode terbarunya. Debugging game lo sekarang jadi jauh lebih mudah.
+
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SysX Engine v0.8</title>
+    <style>
+        body { background-color: #333; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: monospace; }
+        canvas { background-color: #000; border: 4px solid #555; border-radius: 8px; box-shadow: 0 8px 20px rgba(0,0,0,0.5); image-rendering: -moz-crisp-edges; image-rendering: -webkit-crisp-edges; image-rendering: pixelated; image-rendering: crisp-edges; }
+        h1 { color: #eee; text-shadow: 2px 2px 4px #000; }
+        #loading-state { color: #aaa; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>SysX Engine v0.8 Demo</h1>
+    <canvas id="game-canvas"></canvas>
+    <div id="loading-state">Loading Assets...</div>
+
+    <script>
+    // ===============================================================
+    //
+    //          SysX Engine - v0.8 "Advanced Debug Tools"
+    //
+    // Perubahan di v0.8 (Melanjutkan Fase 3):
+    // - Advanced Debug Overlay: Menampilkan FPS, jumlah partikel, dll.
+    // - API `watch()`: Fungsi baru untuk menampilkan nilai variabel di layar debug.
+    //
+    // ===============================================================
+
+    // ---------------------------------------------------------------
+    // FILE: sysx.js (Core Engine)
+    // ---------------------------------------------------------------
+    const SysX = (() => {
+        let _ctx = null, _canvas = null, _assets = {}, _inputState = {}, _prevInputState = {};
+        let _shakeEndTime = 0, _shakeIntensity = 0;
+        let _particles = [];
+        let _currentMusic = null;
+        
+        let _debugMode = false;
+        let _frameCount = 0, _lastFpsUpdate = 0, _currentFps = 0;
+        let _watchedValues = new Map(); // <-- BARU: Untuk menyimpan variabel yang di-watch
+
+        const TILE_SIZE = 16;
+        const SPRITESHEET_KEY = 'main_spritesheet';
+        const PICO8_PALETTE = ['#000000', '#1D2B53', '#7E2553', '#008751', '#AB5236', '#5F574F', '#C2C3C7', '#FFF1E8', '#FF004D', '#FFA300', '#FFEC27', '#00E436', '#29ADFF', '#83769C', '#FF77A8', '#FFCCAA'];
+
+        function init(context) {
+            _canvas = context.canvas; _ctx = context.ctx; _assets = context.assets;
+            _ctx.imageSmoothingEnabled = false;
+            _lastFpsUpdate = performance.now();
+            if (typeof window._create === 'function') window._create();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameLoop(timestamp) {
+            _frameCount++;
+            if (timestamp > _lastFpsUpdate + 1000) {
+                _currentFps = _frameCount; _frameCount = 0; _lastFpsUpdate = timestamp;
+            }
+
+            updateParticles();
+            
+            if (Date.now() < _shakeEndTime) {
+                const dx = (Math.random() - 0.5) * _shakeIntensity * 2;
+                const dy = (Math.random() - 0.5) * _shakeIntensity * 2;
+                _ctx.translate(dx, dy);
+            } else { _shakeIntensity = 0; }
+
+            if (typeof window._update === 'function') window._update();
+            if (typeof window._draw === 'function') window._draw();
+            
+            drawParticles();
+            drawDebugInfo();
+
+            _ctx.setTransform(1, 0, 0, 1, 0, 0);
+            _prevInputState = { ..._inputState };
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updateParticles() { for (let i = _particles.length - 1; i >= 0; i--) { const p = _particles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--; if (p.life <= 0) _particles.splice(i, 1); } }
+        function drawParticles() { for (const p of _particles) rectfill(p.x, p.y, p.size, p.size, p.color); }
+        
+        // <-- DITINGKATKAN: Debug overlay sekarang lebih informatif
+        function drawDebugInfo() {
+            if (_debugMode) {
+                const info = [
+                    `FPS: ${_currentFps}`,
+                    `PART: ${_particles.length}`
+                ];
+                _watchedValues.forEach((value, key) => {
+                    info.push(`${key.toUpperCase()}: ${value}`);
+                });
+
+                let y = 0;
+                for(const text of info) {
+                    const textWidth = _ctx.measureText(text).width;
+                    rectfill(0, y, textWidth + 8, 16, 0);
+                    print(text, 4, y + 12, 7);
+                    y += 16;
+                }
+            }
+        }
+        
+        // --- API PUBLIK ---
+        function cls(c) { _ctx.fillStyle = PICO8_PALETTE[c] || '#000'; _ctx.fillRect(0, 0, _canvas.width, _canvas.height); }
+        function rectfill(x, y, w, h, c) { _ctx.fillStyle = PICO8_PALETTE[c] || '#FFF'; _ctx.fillRect(x, y, w, h); }
+        function print(t, x, y, c) { _ctx.font = '14px monospace'; _ctx.fillStyle = PICO8_PALETTE[c] || '#FFF'; _ctx.fillText(t, x, y); }
+        function spr(idx, dx, dy) { const sheet = _assets[SPRITESHEET_KEY]; if (!sheet || !sheet.complete) return; const cols = Math.floor(sheet.width / TILE_SIZE); const sx = (idx % cols) * TILE_SIZE; const sy = Math.floor(idx / cols) * TILE_SIZE; _ctx.drawImage(sheet, sx, sy, TILE_SIZE, TILE_SIZE, dx, dy, TILE_SIZE, TILE_SIZE); }
+        function map(tm, mx, my) { if (!tm) return; for (let r = 0; r < tm.length; r++) for (let c = 0; c < tm[r].length; c++) if (tm[r][c] >= 0) spr(tm[r][c], mx + c * TILE_SIZE, my + r * TILE_SIZE); }
+        function sfx(key) { const sound = _assets[key]; if (sound) { sound.currentTime = 0; sound.play(); } }
+        function collide(r1, r2) { if (!r1 || !r2) return false; return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y; }
+        function shake(intensity, duration) { _shakeIntensity = intensity; _shakeEndTime = Date.now() + duration; }
+        function emit(x, y, count = 10, color = 9, life = 30) { for (let i = 0; i < count; i++) _particles.push({ x, y, vx: (Math.random() - 0.5) * 4, vy: (Math.random() - 0.5) * 4 - 1, size: Math.random() * 2 + 1, life: Math.random() * life, color }); }
+        function music(key, loop = true, stop = false) { if (_currentMusic) { _currentMusic.pause(); _currentMusic = null; } if (stop) return; const sound = _assets[key]; if (sound) { sound.loop = loop; sound.currentTime = 0; sound.play(); _currentMusic = sound; } }
+        
+        function debug(isEnabled) { _debugMode = !!isEnabled; }
+
+        // <-- BARU: Watch API
+        function watch(key, value) {
+            if (_debugMode) {
+                _watchedValues.set(key, value);
+            }
+        }
+
+        function btn(k) { return _inputState[k] || false; }
+        function btnp(k) { return _inputState[k] && !_prevInputState[k]; }
+        function _updateInput(ns) { _inputState = ns; }
+        
+        return { init, cls, rectfill, print, spr, map, sfx, music, collide, shake, emit, debug, watch, btn, btnp, _updateInput };
+    })();
+
+    // ---------------------------------------------------------------
+    // FILE: game.js (Contoh Game Pengguna)
+    // ---------------------------------------------------------------
+    let player, bullets, enemies, score;
+    let isDebug = false; // <-- BARU: State untuk toggle debug
+    const levelData = [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]];
+
+    function _create() {
+        player = { x: 152, y: 200, w: 16, h: 16, speed: 2, spriteIndex: 3 };
+        bullets = [];
+        enemies = [];
+        score = 0;
+        for(let i = 0; i < 5; i++) {
+            enemies.push({ x: 30 + i * 55, y: 40, w: 16, h: 16, speed: 0.5, spriteIndex: 4 });
+        }
+        SysX.music('bg_music');
+    }
+
+    function _update() {
+        // <-- BARU: Toggle debug mode dengan tombol 'x' (keyB)
+        if (SysX.btnp('keyB')) {
+            isDebug = !isDebug;
+            SysX.debug(isDebug);
+        }
+
+        // <-- BARU: Gunakan watch untuk melacak jumlah musuh
+        SysX.watch('enemies', enemies.length);
+        SysX.watch('bullets', bullets.length);
+
+        if (SysX.btn('left'))  player.x -= player.speed;
+        if (SysX.btn('right')) player.x += player.speed;
+        player.x = Math.max(0, Math.min(320 - player.w, player.x));
+
+        if (SysX.btnp('space')) {
+            bullets.push({ x: player.x + player.w / 2 - 2, y: player.y, w: 4, h: 8, speed: 4, color: 10 });
+            SysX.sfx('shoot_sound');
+        }
+
+        for (let i = bullets.length - 1; i >= 0; i--) { bullets[i].y -= bullets[i].speed; if (bullets[i].y < -bullets[i].h) bullets.splice(i, 1); }
+        
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const enemy = enemies[i];
+            enemy.x += enemy.speed;
+            if(enemy.x < 10 || enemy.x > 320 - 26) enemy.speed *= -1;
+            for (let j = bullets.length - 1; j >= 0; j--) {
+                if(SysX.collide(bullets[j], enemy)) {
+                    SysX.shake(4, 150);
+                    SysX.sfx('explosion_sound');
+                    SysX.emit(enemy.x + enemy.w / 2, enemy.y + enemy.h / 2, 15, 9, 40);
+                    enemies.splice(i, 1);
+                    bullets.splice(j, 1);
+                    score += 100;
+                    break;
+                }
+            }
+        }
+    }
+
+    function _draw() {
+        SysX.cls(1);
+        SysX.map(levelData, 0, 208);
+        SysX.spr(player.spriteIndex, player.x, player.y);
+        enemies.forEach(e => SysX.spr(e.spriteIndex, e.x, e.y));
+        bullets.forEach(b => SysX.rectfill(b.x, b.y, b.w, b.h, b.color));
+        SysX.print(`SCORE: ${score}`, 8, 220, 7); // Geser teks skor ke bawah
+    }
+
+    // ---------------------------------------------------------------
+    // FILE: bootloader.js (Simulasi Firmware) - Tidak ada perubahan
+    // ---------------------------------------------------------------
+    document.addEventListener('DOMContentLoaded', () => {
+        const canvas = document.getElementById('game-canvas'), ctx = canvas.getContext('2d'), loadingText = document.getElementById('loading-state');
+        canvas.width = 320; canvas.height = 240;
+        const fakeManifest = { assets: [ { key: 'main_spritesheet', path: 'https://placehold.co/80x16/000000/FFF.png?text=....' }, { key: 'shoot_sound', path: 'data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU9vT19PCgoLDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3+Dh4uPk5ebn6Onq6+zt7u/w8fLz9PX29/j5+vv8/f7/' }, { key: 'explosion_sound', path: 'data:audio/wav;base64,UklGRigBAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABgAZGF0YQQBAAD9/f7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+' }, { key: 'bg_music', path: 'data:audio/wav;base64,UklGRiYGAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABgAZGF0YQIGAAB3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3-'} ] };
+        async function loadAssets(manifest) { const assetPromises = manifest.assets.map(assetInfo => new Promise(resolve => { if (assetInfo.path.startsWith('data:audio')) { const audio = new Audio(assetInfo.path); resolve({ key: assetInfo.key, asset: audio }); } else { const img = new Image(); img.src = assetInfo.path; img.onload = () => resolve({ key: assetInfo.key, asset: img }); img.onerror = () => resolve({ key: assetInfo.key, asset: null }); } })); const loaded = await Promise.all(assetPromises); const assetMap = {}; loaded.forEach(item => { if (item.asset) assetMap[item.key] = item.asset; }); return assetMap; }
+        const keyMap = { 'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right', ' ': 'space', 'x': 'keyB' };
+        const activeKeys = {};
+        document.addEventListener('keydown', (e) => { if (keyMap[e.key]) { activeKeys[keyMap[e.key]] = true; e.preventDefault(); } });
+        document.addEventListener('keyup', (e) => { if (keyMap[e.key]) { activeKeys[keyMap[e.key]] = false; e.preventDefault(); } });
+        function updateEngineInput() { SysX._updateInput(activeKeys); requestAnimationFrame(updateEngineInput); }
+        async function boot() {
+            const loadedAssets = await loadAssets(fakeManifest);
+            loadingText.textContent = "Assets Loaded. Booting...";
+            SysX.init({ canvas, ctx, assets: loadedAssets });
+            updateEngineInput();
+            loadingText.style.display = 'none';
+        }
+        boot();
+    });
+    </script>
+</body>
+</html>
+```
+
+**KONFIRMASI PROGRESS:**
+
+Dengan ditambahkannya alat bantu debug yang lebih canggih, kita telah menyelesaikan pilar kedua dari Fase 3.
+
+**Fase 3 - Progress: 90% Selesai.**
+
+* ✅ **Debugging Tools:** Selesai.
+* ✅ **Dokumentasi API Resmi:** Selesai.
+* 🟡 **State Management:** Sebagian selesai (sistemnya sudah ada, tapi bisa lebih rapi).
+
+**Langkah Selanjutnya:**
+
+Langkah terakhir untuk menuntaskan Fase 3 adalah **menyelesaikan pilar State Management**. Meskipun kita sudah punya sistem `state()` yang berfungsi, kita akan membuatnya lebih rapi dan "resmi" dengan menambahkan fungsi `_init_` untuk setiap state. Ini akan membuat kode game lebih terstruktur karena setiap state bisa punya fungsi inisialisasinya sendiri.
+
+Setelah itu, Fase 3 akan 100% selesai dan kita siap masuk ke fase final: Integrasi Firmware. Lanjut, B

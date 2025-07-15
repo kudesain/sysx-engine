@@ -1,0 +1,18 @@
+{
+  "version": "1",
+  "main_script": "game.js",
+  "assets": [
+    {
+      "key": "main_spritesheet",
+      "path": "assets/spritesheet.png"
+    },
+    {
+      "key": "shoot_sfx",
+      "path": "assets/audio/shoot.wav"
+    },
+    {
+      "key": "level_music",
+      "path": "assets/audio/music.mp3"
+    }
+  ]
+}
